@@ -103,7 +103,7 @@ impl I2cDevice for Tca9554 {
 
 /// Touch state shared between a board (UI) and its touch controller.
 #[derive(Default, Debug, Clone, Copy)]
-pub struct TouchState { pub down: bool, pub x: u16, pub y: u16, pub seen: bool, pub release_pending: bool }
+pub struct TouchState { pub down: bool, pub x: u16, pub y: u16, pub seen: bool, pub release_pending: bool, pub key: bool }
 impl TouchState {
     pub fn update(&mut self, x: u16, y: u16, down: bool) {
         self.x = x; self.y = y;
@@ -132,7 +132,7 @@ impl Gt911 {
             0x8047 => 0x41,                                                                                     // config version
             0x8048 => self.w as u8, 0x8049 => (self.w >> 8) as u8, 0x804a => self.h as u8, 0x804b => (self.h >> 8) as u8,
             0x804c => 5,                                                                                        // touch number
-            0x814e => 0x80 | t.down as u8,                                                                      // buffer ready + count
+            0x814e => 0x80 | (t.key as u8) << 4 | t.down as u8,                                                 // buffer ready, HaveKey, count
             0x814f => 0, 0x8150 => t.x as u8, 0x8151 => (t.x >> 8) as u8, 0x8152 => t.y as u8, 0x8153 => (t.y >> 8) as u8, 0x8154 => 20, 0x8155 => 0, 0x8156 => 0,
             _ => 0,
         }

@@ -15,7 +15,9 @@ window.installTouchInput = function (canvas, send, { intervalMs = 40, trace = nu
   let pointer = null, last = 0, pending = null, timer = null, sequence = 0;
   const now = () => performance.timeOrigin + performance.now();
   const sample = (e) => {
-    const r = canvas.getBoundingClientRect();
+    // the content box: the workbench draws the bezel as the canvas's border
+    const b = canvas.getBoundingClientRect(), left = b.left + (canvas.clientLeft || 0), top = b.top + (canvas.clientTop || 0);
+    const r = { left, top, width: canvas.clientWidth || b.width, height: canvas.clientHeight || b.height };
     const x = Math.max(0, Math.min(canvas.width - 1, Math.round((e.clientX - r.left) * canvas.width / r.width)));
     const y = Math.max(0, Math.min(canvas.height - 1, Math.round((e.clientY - r.top) * canvas.height / r.height)));
     return { ...window.panelPoint(x, y, canvas.width, canvas.height, rotation()), id: ++sequence, event: e.type, arrivalMs: now() };

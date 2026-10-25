@@ -172,6 +172,8 @@ impl esp_soc::SocBus for SocBus {
         p.rtc.ram.write(0x38, cause | (cause << 6));
         p.rtc.ram.write(0x98, 0);                       // watchdog disarmed by the reset; the ROM re-arms it
         p.i2s0.pcm = old.i2s0.pcm; p.i2s0.frames_out = old.i2s0.frames_out; p.i2s1.pcm = old.i2s1.pcm; p.i2s1.frames_out = old.i2s1.frames_out;   // keep the captured audio continuous
+        // The card in the socket keeps its power and its state; IDF's init resets it with CMD0.
+        p.sdmmc.devices = old.sdmmc.devices; p.sdmmc.stats = old.sdmmc.stats; p.sd_pins = old.sd_pins;
         self.mmu = [MMU_INVALID; MMU_ENTRIES];
         self.invalidate_tlb();
         self.reset_approximate_cache();
@@ -234,6 +236,17 @@ impl esp_soc::SocBus for SocBus {
         Ok(())
     }
     fn set_strap(&mut self, v: u32) { self.periph.gpio.strap = v; }
+    /// The card goes in the board's socket (`BoardModel::sd_socket`); firmware reaches it through
+    /// whichever slot's clock it routes to the socket's CLK pin.
+    fn attach_sd_card(&mut self, image: Box<dyn esp_periph::sdmmc::SdStore>, config: esp_periph::sdmmc::SdCardConfig) -> Result<String, String> {
+        if config.timed_bus { return Err("SD bus timing (--sd-timing) is modelled on the ESP32-P4 only".into()); }
+        let (clk, cmd, data) = self.board.sd_socket().ok_or_else(|| format!("board '{}' has no SD card socket", self.board.name()))?;
+        let card = esp_periph::sdmmc::SdCard::with_config(image, config)?;
+        let what = format!("{}, {} blocks ({}), serial {:08x}, programming {} us, at CLK {clk} CMD {cmd} D0-D3 {data:?}", card.describe(), card.blocks(),
+                           if card.sdxc() { "SDXC" } else { "SDHC" }, card.serial(), card.config.prg_ns / 1000);
+        self.periph.attach_sd(periph::SdPins { clk, cmd, data }, Box::new(card));
+        Ok(what)
+    }
     fn set_reset_cause(&mut self, c: u32) { self.periph.rtc.ram.write(0x38, c | (c << 6)); }
     fn report(&self) -> String {
         let p = &self.periph;
@@ -245,6 +258,8 @@ impl esp_soc::SocBus for SocBus {
         if p.lcd_cam.lcd_frames > 0 { s += &format!("[emu] lcd: {} RGB frames\n", p.lcd_cam.lcd_frames); }
         if p.lcd_cam.frames + p.lcd_cam.dropped > 0 { s += &format!("[emu] camera: {} VSYNCs, {} frames with dropped data\n", p.lcd_cam.frames, p.lcd_cam.dropped); }
         if p.rmt.tx_count > 0 { s += &format!("[emu] rmt tx {}\n", p.rmt.tx_count); }
+        { let d = &p.sdmmc.stats;
+          if !p.sdmmc.devices.is_empty() || d.commands > 0 { s += &format!("[sdmmc] {} commands ({} unanswered), {} bytes read, {} written\n", d.commands, d.timeouts, d.bytes_read, d.bytes_written); } }
         s.trim_end().to_string()
     }
     fn set_debug(&mut self, f: &esp_soc::DebugFlags) {

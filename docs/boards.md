@@ -29,6 +29,8 @@ pub trait BoardModel {
     fn input_levels(&self) -> Vec<(u8, bool)>                  // current board-driven input levels
     fn named_pin(&self, name: &str) -> Option<u8>           // `btn1`, `sw`... for scripts and the UI
     fn encoder(&self) -> Option<(u8, u8)>                    // rotary encoder CLK/DT, for `knob`
+    fn sd_socket(&self) -> Option<(u8, u8, [u8; 4])>         // SD socket CLK/CMD/D0-D3, for `--sd` (S3)
+    fn key(&mut self, name: &str, down: bool) -> bool        // a key that is not a GPIO, for `key` and the UI
     fn report(&self) -> String                               // end-of-run statistics
     fn set_camera_picture(&mut self, p: Picture) {}
     fn camera_frame(&mut self) -> Option<(u32, u32, Arc<Vec<u8>>)>   // YUYV at sensor size
@@ -189,6 +191,35 @@ observation, not a checked-in test or a public firmware fixture. That run cannot
 be reproduced from this repository alone; no public build or private relay
 configuration is included. CI covers the directed board and UI tests above,
 not that firmware's boot or relay connection.
+
+## `xteink-x4pro` — Xteink X4 Pro e-reader (ESP32-S3)
+
+Selected with `--board xteink-x4pro` (alias `x4pro`). The native CLI defaults to 16 MB flash and
+8 MB PSRAM for this board, as for `stopwatch`. Wiring follows FreeInk's board profile
+(`BoardConfig.h`, `XTEINK_X4_PRO`) as used by CrossPoint Reader's `x4pro` environment.
+
+| Device | Bus | Model |
+| --- | --- | --- |
+| SSD1677 800×480 e-paper | SPI2, CS GPIO13, DC GPIO18, RST GPIO14, BUSY GPIO6 | `esp_soc::devices::Ssd1677`: B/W and RED RAMs, window, counters and data-entry direction, auto-write fill, 21h/22h/20h update, 32h register LUT, software reset, deep sleep until RST |
+| GT911 at `0x5d` | I2C0 | Portrait 480×800 reports; the capacitive Home pad is status bit 4 (HaveKey). Answers only while GPIO1 is high and GPIO2 low (its supply) |
+| BM8563 at `0x51` | I2C0 | PCF8563 registers holding a fixed valid time, 2026-01-01 12:00:00 |
+| CW2017 at `0x63` | I2C0 | Running fuel gauge, 3.95 V, 87 %; the firmware writes its battery profile |
+| SD card | SDMMC host, 1-bit: CLK GPIO41, CMD GPIO42, D0 GPIO40 | `--sd image` / the page's SD card image (raw MBR + FAT32) |
+| Buttons Left / Right / Power | GPIO0 / GPIO7 / GPIO3, active low | Script names `left` / `right` / `power`; browser buttons. Home: `key home 1` / `key home 0` |
+
+The panel is mounted turned 90°: `display()` gives the 480×800 portrait view that the device is
+held in, and touch coordinates are in that view. The glass shows the RAM right after an update
+with the DISPLAY bit, as one of four gray levels: OTP waveforms show the B/W RAM; a register LUT
+whose state-00 row is empty is CrossPoint's anti-aliasing overlay (01 light, 10 mid, 11 dark gray,
+00 unchanged); any other register LUT maps (B/W, RED) to four absolute tones. Ink, ghosting and
+temperature are not modelled. BUSY stays high for fixed times: 1500 ms full, 350 ms fast,
+450 ms register LUT, 20 ms power-only, 2 ms reset, 5 ms fill.
+
+Not modelled: the frontlight's LEDC outputs drive nothing, the SD power switch on GPIO5 is ignored
+(the card is always powered), there is no IMU, and the controller probe in `XteinkDetect.cpp`
+reads all-ones and keeps the SSD1677 default. The unit tests in `ssd1677.rs` and
+`xteink_x4pro.rs` cover RAM addressing, the update modes, BUSY edges, deep sleep, touch power
+gating, the Home key and the portrait rotation. They do not boot CrossPoint firmware.
 
 ## `waveshare-c6-lcd147` — Waveshare ESP32-C6-LCD-1.47 (ESP32-C6)
 

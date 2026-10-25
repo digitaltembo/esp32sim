@@ -408,7 +408,7 @@ fn setup_s3(o: &Opts) -> esp32s3::Machine {
         if invalid { usage_error(message); }
     }
     let mut m = esp32s3::machine(o.mac.unwrap_or([0x44, 0x1b, 0xf6, 0x75, 0xdc, 0xe0]));
-    m.bus.board = esp32s3::board::make_board(&o.board).unwrap_or_else(|| { eprintln!("unknown board '{}' (atech14, waveshare-cam, waveshare-lcd4b, waveshare-amoled18-v2, stopwatch, none)", o.board); std::process::exit(2) });
+    m.bus.board = esp32s3::board::make_board(&o.board).unwrap_or_else(|| { eprintln!("unknown board '{}' (atech14, waveshare-cam, waveshare-lcd4b, waveshare-amoled18-v2, stopwatch, xteink-x4pro, none)", o.board); std::process::exit(2) });
     if o.measured_te {
         assert_eq!(m.bus.board.name(), "waveshare-amoled18-v2", "--measured-te requires the AMOLED V2 board");
         m.bus.board = Box::new(esp32s3::board::WaveshareAmoled18V2::with_measured_te());
@@ -423,9 +423,10 @@ fn setup_s3(o: &Opts) -> esp32s3::Machine {
     attach_nearby_networks(&mut m.bus.periph.wifi.link, o);
     if let Some(p) = &o.cam_image { match esp_soc::picture::load(p) { Ok(pic) => { eprintln!("[emu] camera picture {} ({}x{})", p, pic.w, pic.h); m.bus.board.set_camera_picture(pic).unwrap_or_else(|e| usage_error(e)); } Err(e) => { eprintln!("[emu] {}", e); std::process::exit(2); } } }
     m.bus.periph.lcd_cam.frame_cycles = (esp32s3::periph::CPU_HZ as f64 / o.cam_fps) as u64;
-    let stopwatch = m.bus.board.name() == "stopwatch";
-    let flash_mb = o.flash_mb.unwrap_or(if stopwatch { 16 } else { 8 });
-    let psram_mb = o.psram_mb.unwrap_or(if stopwatch { 8 } else { 2 });
+    // these boards carry 16 MB of flash and 8 MB of octal PSRAM
+    let big = matches!(m.bus.board.name(), "stopwatch" | "xteink-x4pro");
+    let flash_mb = o.flash_mb.unwrap_or(if big { 16 } else { 8 });
+    let psram_mb = o.psram_mb.unwrap_or(if big { 8 } else { 2 });
     if flash_mb != 8 { m.bus.set_flash_size(flash_mb << 20); }
     if psram_mb != 2 { m.bus.set_psram_size(psram_mb << 20).unwrap(); }
     if o.flash_octal { m.bus.set_flash_octal(true); }

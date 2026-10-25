@@ -110,6 +110,7 @@
       <div class="row" id="lcdextras" style="display:none;margin-top:8px"><span class="boardbtn" id="lcdboot" data-pin="9">BOOT</span><span class="st">press to switch all-channel / single-channel scan</span><span class="led" id="lcdled" title="WS2812"></span><span class="st">WS2812</span></div>
       <div class="row" id="tdbuttons" style="display:none;margin-top:8px"><span class="boardbtn" data-pin="0">left (GPIO 0)</span><span class="boardbtn" data-pin="35">right (GPIO 35)</span><span class="st">the board's two buttons</span></div>
       <div class="row" id="stopwatchbuttons" style="display:none;margin-top:8px"><span class="boardbtn" data-pin="2">A (GPIO 2)</span><span class="boardbtn" data-pin="1">B (GPIO 1)</span></div>
+      <div class="row" id="x4buttons" style="display:none;margin-top:8px"><span class="boardbtn" data-pin="0">◀ left (GPIO 0)</span><span class="boardbtn" data-pin="7">right ▶ (GPIO 7)</span><span class="boardbtn" data-key="home">⌂ home (touch key)</span><span class="boardbtn" data-pin="3">⏻ power (GPIO 3)</span></div>
     </div>
     <div class="card" id="netpanel" style="display:none">
       <div class="row"><strong>Network</strong><span class="st" id="netstat">two emulated ESP32-C6 motes on one 802.15.4 medium</span></div>
@@ -219,7 +220,7 @@ const lcdRaw = document.createElement('canvas');
 let lcdRotation = 0;
 // what the panel header says once a frame has arrived, and the rotation that reads upright for a
 // board's usual firmware (the T-Display is used landscape, MADCTL MV|MX: its top is the glass's right edge)
-const PANEL_TEXT = { 'waveshare-c6-lcd147': 'ST7789 172×320 over SPI2 + GDMA', 'ttgo-tdisplay': 'ST7789 135×240 over VSPI', stopwatch: 'CO5300 468×466 QSPI · CST820 touch' };
+const PANEL_TEXT = { 'waveshare-c6-lcd147': 'ST7789 172×320 over SPI2 + GDMA', 'ttgo-tdisplay': 'ST7789 135×240 over VSPI', stopwatch: 'CO5300 468×466 QSPI · CST820 touch', 'xteink-x4pro': 'SSD1677 e-paper 800×480 (held portrait) · GT911 touch — click to tap' };
 const PANEL_ROTATE = { 'ttgo-tdisplay': 270 };
 function paintLcd() {
   const c = $('#lcd'), w = lcdRaw.width, h = lcdRaw.height; if (!w || !h) return;
@@ -327,6 +328,14 @@ function handleMessage(data) {
     if (m.t === 'board' && m.name === 'waveshare-amoled18-v2') { document.querySelector('h1').textContent = 'ESP32‑S3 emulator, Waveshare ESP32‑S3‑Touch‑AMOLED‑1.8 V2'; $('#lcdstat').textContent = 'CO5300 368×448 over QSPI, click or drag to touch'; const lcd = $('#lcd'); const quarter = lcdRotation === 90 || lcdRotation === 270; lcd.style.width = (quarter ? 448 : 368) + 'px'; lcd.style.height = (quarter ? 368 : 448) + 'px'; $('#lcdpanel').style.display = ''; syncTitle(); }
     if (m.t === 'board') {
       $('#stopwatchbuttons').style.display = m.name === 'stopwatch' ? '' : 'none';
+      $('#x4buttons').style.display = m.name === 'xteink-x4pro' ? '' : 'none';
+      $('#lcdpanel').classList.toggle('withbuttons', m.name === 'xteink-x4pro');
+      if (m.name === 'xteink-x4pro') {
+        document.querySelector('h1').textContent = 'ESP32‑S3 emulator — Xteink X4 Pro';
+        $('#lcdstat').textContent = PANEL_TEXT['xteink-x4pro'];
+        const lcd = $('#lcd'); lcd.style.background = '#fff'; lcd.style.borderRadius = '4px';
+        $('#lcdpanel').style.display = ''; syncTitle();
+      }
       if (m.name === 'stopwatch') {
         document.querySelector('h1').textContent = 'ESP32‑S3 emulator — M5Stack StopWatch';
         $('#lcdstat').textContent = PANEL_TEXT.stopwatch;
@@ -369,8 +378,10 @@ function connect() {
 }
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => { document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on')); b.classList.add('on'); view = b.dataset.src; $('#send').textContent = keySrc() === 'uart0' ? 'send to UART0' : 'send to USB‑CDC'; showTerm(view === 'term'); render(); });
 document.querySelectorAll('.btn .cell, .boardbtn').forEach(el => {
-  const pin = +el.dataset.pin; let downAt = 0;
-  const down = v => { el.classList.toggle('down', v); if (v) { downAt = performance.now(); send({t:'btn', pin, v:1}); } else { setTimeout(() => send({t:'btn', pin, v:0}), Math.max(0, 60 - (performance.now() - downAt))); } };
+  // data-key: a board key that is not a GPIO (the X4 Pro's capacitive Home pad)
+  const pin = +el.dataset.pin, key = el.dataset.key; let downAt = 0;
+  const msg = v => key ? {t:'boardkey', name:key, v} : {t:'btn', pin, v};
+  const down = v => { el.classList.toggle('down', v); if (v) { downAt = performance.now(); send(msg(1)); } else { setTimeout(() => send(msg(0)), Math.max(0, 60 - (performance.now() - downAt))); } };
   el.onmousedown = () => down(true); el.onmouseup = el.onmouseleave = () => { if (el.classList.contains('down')) down(false); };
 });
 function turn(d) { knobAngle += d * 20; $('#mark').style.transform = `rotate(${knobAngle}deg)`; send({t:'knob', d}); }

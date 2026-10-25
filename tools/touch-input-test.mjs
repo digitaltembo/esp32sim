@@ -124,3 +124,19 @@ test('the touch handler sends panel coordinates for a rotated view', () => {
   canvas.dispatchEvent(Object.assign(new Event('pointerup'), {clientX: 447, clientY: 367, pointerId: 1}));
   assert.deepEqual(messages, [{t: 'touch', x: 0, y: 447, down: 1}, {t: 'touch', x: 367, y: 0, down: 0}]);
 });
+
+test('a canvas border (the workbench bezel) is outside the panel', () => {
+  const messages = [];
+  // 480×800 panel shown at 240×400 inside a 20 px border: the box is 280×440 at (100, 50)
+  const canvas = Object.assign(new EventTarget(), {
+    width: 480, height: 800, clientLeft: 20, clientTop: 20, clientWidth: 240, clientHeight: 400,
+    getBoundingClientRect: () => ({left: 100, top: 50, width: 280, height: 440}),
+    setPointerCapture() {},
+  });
+  const context = { window: {}, performance: {timeOrigin: 0, now: () => 0}, setTimeout: () => 0, clearTimeout() {} };
+  vm.runInNewContext(source, context);
+  context.window.installTouchInput(canvas, data => messages.push(JSON.parse(data)));
+  canvas.dispatchEvent(Object.assign(new Event('pointerdown'), {clientX: 120, clientY: 70, pointerId: 1}));
+  canvas.dispatchEvent(Object.assign(new Event('pointerup'), {clientX: 240, clientY: 270, pointerId: 1}));
+  assert.deepEqual(messages, [touch(0, 1, 0), touch(240, 0, 400)]);
+});

@@ -15,6 +15,8 @@ mod web;
 
 #[derive(Clone, Debug)]
 pub enum ScriptAction { Gpio(u8, bool), Serial(String), Uart(usize, String), Stop, Touch(u16, u16, bool), Poke(u32, u32), TouchPad(u8, bool), Ble(String), Analog(u8, esp_periph::AnalogSource),
+    /// `key <name> <1|0>`: a board key that is not a GPIO (`BoardModel::key`)
+    Key(String, bool),
     /// `waituart0 <timeout_s> <text>`: hold the rest of the script until UART0 prints `text` (or the
     /// timeout passes), then shift every later action by the time actually waited. Fields: text,
     /// timeout in cycles, the cycle the script placed it at.
@@ -1047,6 +1049,7 @@ impl<S: Soc> Machine<S> {
                 ScriptAction::Stop => { self.max_cycles = 0; stopped = true; }
                 ScriptAction::TouchPad(pin, touched) => self.bus.set_touch_input(pin, touched),
                 ScriptAction::Touch(x, y, d) => { self.bus.touch_input(x, y, d); }
+                ScriptAction::Key(name, down) => { if self.bus.board().key(&name, down) { *self.bus.irq_dirty() = true; } }
                 ScriptAction::Poke(a, v) => { let _ = self.bus.write32_unpriced(a, v); }
                 ScriptAction::Analog(pin, mut src) => {
                     // a waveform plays from when it is applied: a `waituart0` before it moves `t`, so the start moves too
@@ -1139,6 +1142,7 @@ impl<S: Soc> Machine<S> {
                 "release" => ev.push((c, ScriptAction::Gpio(pin(rest)?, true))),
                 "gpio" => { let mut p = rest.split_whitespace(); let pn = pin(p.next().unwrap_or(""))?; let l = p.next().unwrap_or("1") == "1"; ev.push((c, ScriptAction::Gpio(pn, l))); }
                 "poke" => { let mut p = rest.split_whitespace(); let a = u32::from_str_radix(p.next().unwrap_or("0").trim_start_matches("0x"), 16).map_err(|e| e.to_string())?; let v = u32::from_str_radix(p.next().unwrap_or("0").trim_start_matches("0x"), 16).map_err(|e| e.to_string())?; ev.push((c, ScriptAction::Poke(a, v))); }
+                "key" => { let mut p = rest.split_whitespace(); let name = p.next().unwrap_or_default().to_string(); let d = p.next().unwrap_or("1") == "1"; ev.push((c, ScriptAction::Key(name, d))); }
                 "touch" => { let mut p = rest.split_whitespace(); let x: u16 = p.next().and_then(|v| v.parse().ok()).unwrap_or(0); let y: u16 = p.next().and_then(|v| v.parse().ok()).unwrap_or(0); let d = p.next().unwrap_or("1") == "1"; ev.push((c, ScriptAction::Touch(x, y, d))); }
                 "touchpad" => {
                     let mut p = rest.split_whitespace(); let pn = pin(p.next().unwrap_or(""))?;

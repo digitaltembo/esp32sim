@@ -465,7 +465,10 @@ impl SocBus {
             self.irq_dirty |= esp_soc::gpio::deliver_board_inputs(&mut *self.board, &mut self.periph.gpio, &mut self.gpio_events, self.cycles);
             self.refresh_tick_budget();
         }
-        self.periph.read32(addr)
+        let v = self.periph.read32(addr);
+        // A STATUS read can raise the SDMMC's busy-clear interrupt.
+        if addr >> 12 == 0x60028 && self.periph.sdmmc.take_read_irq() { self.sdmmc_irq_changed(); }
+        v
     }
     /// EX133: every device-register access must have been deferred out of a multi-quantum run.
     /// One that was not (a PIE or MAC16 word access; nothing real does this) saw early time.
@@ -561,6 +564,28 @@ impl SocBus {
             self.periph.spi1.execute(&mut self.flash, &mut self.psram);
             for (m, off, len) in std::mem::take(&mut self.periph.spi1.dirty) { self.note_written(match m { crate::periph::DirtyMem::Flash => SRC_FLASH, crate::periph::DirtyMem::Psram => SRC_PSRAM }, off, len); }
         }
+        // Only an SDMMC register write starts a command or an IDMAC resume.
+        if a >> 12 == 0x60028 && self.periph.sdmmc.pending() { self.run_sdmmc(); }
+    }
+
+    /// Carry out the SDMMC command or IDMAC resume the last write started, on the slots' current
+    /// pin routing. The host is lifted out of the peripherals while its IDMAC reaches memory
+    /// through the bus, so DMA writes bump page versions as CPU stores do.
+    #[cold]
+    #[inline(never)]
+    fn run_sdmmc(&mut self) {
+        self.periph.sdmmc.route = self.periph.sd_routes();
+        let mut host = std::mem::take(&mut self.periph.sdmmc);
+        host.run(&mut SdmmcDma(self));
+        self.periph.sdmmc = host;
+        self.sdmmc_irq_changed();
+    }
+
+    /// The SDMMC host's interrupt may have moved outside a register write (an `optional` device
+    /// caches its source bits on its own writes only).
+    fn sdmmc_irq_changed(&mut self) {
+        esp_periph::Dispatch::refresh_optional(&mut self.periph, crate::periph::SDMMC_BLOCK);
+        self.irq_dirty = true;
     }
 
     fn now_us(&self) -> u64 { self.cycles / (crate::periph::CPU_HZ / 1_000_000) }
@@ -905,6 +930,29 @@ impl SocBus {
             for pin in esp_soc::pins::ChipPins::S3.routes(&self.periph.gpio, &self.periph.io_mux).output_pins(RMT_SIG_OUT0 + ch as u32) { self.board.rmt_frame(pin, &bits); }
         }
         self.irq_dirty = true;
+    }
+}
+
+/// What the SDMMC host's IDMAC reaches: internal SRAM at its data-bus addresses. The S3 does not
+/// set SOC_SDMMC_PSRAM_DMA_CAPABLE (IDF v5.5.5 components/soc/esp32s3/include/soc/soc_caps.h),
+/// so drivers hand it DMA-capable internal buffers; anything else is a bus error (FBE).
+struct SdmmcDma<'a>(&'a mut SocBus);
+impl SdmmcDma<'_> {
+    fn check(addr: u32, len: usize) -> Result<(), Fault> {
+        let end = addr as u64 + len as u64;
+        if addr >= DRAM_LOW && end <= DRAM_HIGH as u64 { Ok(()) } else { Err(Fault::Unmapped) }
+    }
+}
+impl esp_periph::sdmmc::SdmmcMemory for SdmmcDma<'_> {
+    fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), Fault> {
+        Self::check(addr, buf.len())?;
+        for (i, b) in buf.iter_mut().enumerate() { *b = self.0.read8_unpriced(addr + i as u32)?; }
+        Ok(())
+    }
+    fn write(&mut self, addr: u32, data: &[u8]) -> Result<(), Fault> {
+        Self::check(addr, data.len())?;
+        for (i, &b) in data.iter().enumerate() { self.0.write8_unpriced(addr + i as u32, b)?; }
+        Ok(())
     }
 }
 #[cfg(test)]

@@ -17,6 +17,8 @@ pub const SRC_GPIO: usize = 16;
 pub const SRC_UART0: usize = 27;
 pub const SRC_UART1: usize = 28;
 pub const SRC_UART2: usize = 29;
+/// ETS_SDIO_HOST_INTR_SOURCE, the SDMMC host (IDF v5.5.5 components/soc/esp32s3/include/soc/interrupts.h:48).
+pub const SRC_SDIO_HOST: usize = 30;
 pub const SRC_SPI2: usize = 21;
 /// ETS_SPI3_INTR_SOURCE (IDF v5.5.5 components/soc/esp32s3/include/soc/interrupts.h:41; v4.4.8
 /// components/soc/esp32s3/include/soc/periph_defs.h:81).
@@ -400,6 +402,21 @@ impl Device for FeIq {
     fn write(&mut self, _off: u32, v: u32) -> WriteEffect { self.word = v; WriteEffect::NONE }
 }
 
+// ------------------------------------------------------------------ SDMMC host (block 0x28)
+/// The SDMMC host's block number (DR_REG_SDMMC_BASE 0x60028000, IDF v5.5.5
+/// components/soc/esp32s3/register/soc/reg_base.h:43).
+pub const SDMMC_BLOCK: u32 = 0x28;
+/// GPIO matrix signals of the SDMMC host, per slot (IDF v5.5.5 components/soc/esp32s3/include/soc/gpio_sig_map.h:312-361):
+/// the card clock out, and the card-detect and write-protect inputs. The S3 has no IO MUX
+/// function for the host (SOC_SDMMC_USE_GPIO_MATRIX): both slots reach their pins through the matrix.
+pub const SIG_SDHOST_CCLK_OUT: [u32; esp_periph::sdmmc::SLOTS] = [172, 173];
+pub const SIG_SDHOST_CARD_DETECT_N: [usize; esp_periph::sdmmc::SLOTS] = [194, 195];
+pub const SIG_SDHOST_CARD_WRITE_PRT: [usize; esp_periph::sdmmc::SLOTS] = [196, 197];
+
+/// The pins an SD card hangs on, from the board's `sd_socket`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SdPins { pub clk: u8, pub cmd: u8, pub data: [u8; 4] }
+
 // ------------------------------------------------------------------ all together
 pub struct Peripherals {
     pub usb: UsbSerialJtag,
@@ -443,6 +460,9 @@ pub struct Peripherals {
     pub intmatrix_dirty: bool,
     pub ledc: Ledc,
     pub mcpwm: [Mcpwm; 2],
+    /// The DesignWare SD/MMC host and the pins of what is on its bus.
+    pub sdmmc: esp_periph::sdmmc::Sdmmc,
+    pub sd_pins: Vec<SdPins>,
 }
 
 // Every peripheral, where it sits, and its interrupt source numbers. Entries for one block are
@@ -490,6 +510,7 @@ device_set! { Peripherals; clock: (clock) CPU_HZ, [(ClockDomain::Systimer, 15), 
     0x3a "AES" (aes) => [SRC_AES];
     0x3c "RSA" (rsa) => [SRC_RSA];
     0x06 "FE" (fe) @ 0x174..=0x177 => [];
+    0x28 "SDMMC" optional (sdmmc) => [SRC_SDIO_HOST];
 }
 
 impl DeviceSet for Peripherals {
@@ -497,12 +518,13 @@ impl DeviceSet for Peripherals {
     fn block_name(block: u32) -> &'static str { Peripherals::block_name(block) }
     fn misc(&self) -> &Misc { &self.misc }
     fn misc_mut(&mut self) -> &mut Misc { &mut self.misc }
-    /// The three registers whose value depends on another device.
-    fn pre_access(&mut self, block: u32, _off: u32, write: bool) {
+    /// The registers whose value depends on another device or on the time.
+    fn pre_access(&mut self, block: u32, off: u32, write: bool) {
         match block {
             0xc2 if !write => self.intmatrix.status = self.source_status(),   // INTERRUPT_*_STATUS reads the live sources
             0x35 => self.wifi.now_cycles = self.clock.cycles(),               // TSF timestamps
             0x08 => self.rtc.now_cycles = self.clock.cycles(),                // SENS ADC samples analog sources at this time
+            SDMMC_BLOCK => self.sdmmc_pre_access(off, write),
             _ => {}
         }
     }
@@ -521,6 +543,52 @@ impl Peripherals {
             io_mux: RegRam::new(), misc: Misc::new(), fake_reads: std::env::var("ESP_EMU_FAKE_READ").ok().map(|v| v.split(',').filter_map(|e| { let mut p = e.split(':'); let a = u32::from_str_radix(p.next()?.trim_start_matches("0x"), 16).ok()?; let o = u32::from_str_radix(p.next().unwrap_or("0").trim_start_matches("0x"), 16).ok()?; let m = u32::from_str_radix(p.next().unwrap_or("ffffffff").trim_start_matches("0x"), 16).ok()?; Some((a, (o, m))) }).collect()).unwrap_or_default(),
             clock: Self::new_clock(),
             spi_exec: false, last_status: [0; 4], intmatrix_dirty: false,
+            sdmmc: esp_periph::sdmmc::Sdmmc::new(esp_periph::sdmmc::SdmmcLayout::Esp32), sd_pins: Vec::new(),
+        }
+    }
+
+    /// The card's time for its busy periods, and CDETECT / WRTPRT from the slots' card-detect and
+    /// write-protect signals. IDF's slot config without those pins connects them to the matrix's
+    /// constant-low input (GPIO_MATRIX_CONST_ZERO_INPUT 0x3C, IDF v5.5.5
+    /// components/soc/esp32s3/include/soc/gpio_pins.h:14): card present, not protected.
+    fn sdmmc_pre_access(&mut self, off: u32, write: bool) {
+        self.sdmmc.now_ns = (self.clock.cycles() as u128 * 1_000_000_000 / CPU_HZ as u128) as u64;
+        if !write && (off == esp_periph::sdmmc::reg::CDETECT || off == esp_periph::sdmmc::reg::WRTPRT) {
+            let (mut cd, mut wp) = (0, 0);
+            for s in 0..esp_periph::sdmmc::SLOTS {
+                cd |= (self.in_signal(SIG_SDHOST_CARD_DETECT_N[s]) as u32) << s;
+                wp |= (self.in_signal(SIG_SDHOST_CARD_WRITE_PRT[s]) as u32) << s;
+            }
+            (self.sdmmc.card_detect_n, self.sdmmc.write_protect) = (cd, wp);
+        }
+    }
+
+    /// The level a GPIO matrix input signal sees: a pin, or the constant-high (0x38) or
+    /// constant-low (0x3C) input, inverted by IN_INV_SEL (bit 6) (IDF v5.5.5
+    /// components/soc/esp32s3/register/soc/gpio_reg.h:2674-2680).
+    pub fn in_signal(&self, sig: usize) -> bool {
+        let v = self.gpio.func_in_sel.get(sig).copied().unwrap_or(0x3c);
+        let level = match v & 0x3f { 0x38 => true, 0x3c => false, p => self.gpio.level(p as u8) };
+        level ^ (v & 0x40 != 0)
+    }
+
+    /// Which attached SD device each slot reaches: the one whose clock pin carries the slot's
+    /// SDHOST_CCLK_OUT signal.
+    pub fn sd_routes(&self) -> [Option<usize>; esp_periph::sdmmc::SLOTS] {
+        let mut r = [None; esp_periph::sdmmc::SLOTS];
+        for (i, p) in self.sd_pins.iter().enumerate() {
+            let out = self.gpio.func_out_sel.get(p.clk as usize).map_or(0x100, |v| v & 0x1ff);
+            if let Some(slot) = SIG_SDHOST_CCLK_OUT.iter().position(|&s| s == out) { r[slot] = Some(i); }
+        }
+        r
+    }
+
+    /// Put an SD device on the bus at `pins`, in place of one already there.
+    pub fn attach_sd(&mut self, pins: SdPins, mut dev: Box<dyn esp_periph::sdmmc::SdDevice>) {
+        dev.set_log(self.sdmmc.logging());
+        match self.sd_pins.iter().position(|&p| p == pins) {
+            Some(i) => self.sdmmc.devices[i] = dev,
+            None => { self.sdmmc.attach(dev); self.sd_pins.push(pins); }
         }
     }
 
@@ -578,6 +646,9 @@ impl Peripherals {
         if fx.contains(WriteEffect::SPI_EXEC) { self.spi_exec = true; }
         if fx.contains(WriteEffect::INTMAP) { self.intmatrix_dirty = true; }
         // ESP-IDF v5.5.4 soc/system_reg.h: PERIP_CLK_EN1/RST_EN1 LCD_CAM bit 8.
+        // SYSTEM_SDIO_HOST_RST, PERIP_RST_EN1 bit 7 (IDF v5.5.5 components/soc/esp32s3/register/soc/system_reg.h:580-585),
+        // which sdmmc_ll_reset_register pulses: every host register to its default, the card stays.
+        if addr == PERIPH_BASE + 0xc0024 && v & (1 << 7) != 0 { self.sdmmc.reset_registers(); self.refresh_optional(SDMMC_BLOCK); }
         if addr == PERIPH_BASE + 0xc001c || addr == PERIPH_BASE + 0xc0024 {
             self.lcd_cam.set_clock_enabled(self.system.read(0x1c) & (1 << 8) != 0 && self.system.read(0x24) & (1 << 8) == 0);
         }

@@ -4,9 +4,11 @@
 //! each LED of a chain sits physically.
 pub mod co5300;
 pub mod dcs_panel;
+pub mod ssd1677;
 pub mod spi_bitbang;
 pub mod ws2812;
 
 pub use dcs_panel::DcsPanel;
 pub use spi_bitbang::SpiBitBang;
+pub use ssd1677::Ssd1677;
 pub use ws2812::Ws2812Chain;

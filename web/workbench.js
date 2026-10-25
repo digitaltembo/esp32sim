@@ -23,6 +23,7 @@
   const BOARD = {
     'waveshare-lcd4b': { soc: 'ESP32-S3 rev 0', cpu: '2× Xtensa LX7 @ 240 MHz', board: 'Waveshare Touch-LCD-4B', peripherals: 'ST7701S 480×480 RGB · GT911 touch · I²S audio' },
     'waveshare-amoled18-v2': { soc: 'ESP32-S3 rev 0', cpu: '2× Xtensa LX7 @ 240 MHz', board: 'Waveshare AMOLED-1.8 V2', peripherals: 'CO5300 368×448 QSPI · CST820 touch' },
+    'xteink-x4pro': { soc: 'ESP32-S3 rev 0', cpu: '2× Xtensa LX7 @ 240 MHz', board: 'Xteink X4 Pro', peripherals: 'SSD1677 800×480 e-paper · GT911 touch · SDMMC card · BM8563 · CW2017' },
     stopwatch: { soc: 'ESP32-S3 rev 0', cpu: '2× Xtensa LX7 @ 240 MHz', board: 'M5Stack StopWatch', peripherals: 'CO5300 468×466 QSPI · CST820 touch · M5PM1 · M5IOE1' },
     atech14: { soc: 'ESP32-S3 rev 0', cpu: '2× Xtensa LX7 @ 240 MHz', board: 'Atech 14-port', peripherals: 'ST7735 · WS2812 · encoder · buttons · I²S audio' },
     'waveshare-cam': { soc: 'ESP32-S3 rev 0', cpu: '2× Xtensa LX7 @ 240 MHz', board: 'Waveshare S3-CAM-OV5640', peripherals: 'OV5640 DVP camera · I²S audio · CH32V003' },

@@ -119,6 +119,12 @@ pub trait BoardModel {
     fn named_pin(&self, _name: &str) -> Option<u8> { None }
     /// The rotary encoder's (CLK, DT) pins, if there is one.
     fn encoder(&self) -> Option<(u8, u8)> { None }
+    /// The SD card socket's (CLK, CMD, D0-D3) pins, on chips whose SDMMC host reaches any pin
+    /// through the GPIO matrix (the S3). `--sd` puts the card there.
+    fn sd_socket(&self) -> Option<(u8, u8, [u8; 4])> { None }
+    /// A board key that is not a GPIO, by name (a touch controller's capacitive key). Returns
+    /// false when the board has no such key.
+    fn key(&mut self, _name: &str, _down: bool) -> bool { false }
     /// Lines for the end-of-run report.
     fn report(&self) -> String { String::new() }
     /// Opt-in software drive after GPIO/IO_MUX writes and board attachment (including reset).
